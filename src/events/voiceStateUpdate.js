@@ -1,6 +1,6 @@
-const { db } = require('../utils/database');
+import { db } from '../utils/database.js';
 
-module.exports = {
+export default {
     name: 'voiceStateUpdate',
     async execute(oldState, newState) {
         const tempChannel = db.prepare('SELECT * FROM temp_voice_channels WHERE channel_id = ?')

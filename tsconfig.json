@@ -1,23 +1,37 @@
 {
     "compilerOptions": {
-        "target": "ES2020",
-        "module": "commonjs",
+        "target": "ES2023",
+        "module": "Node16",
+        "moduleResolution": "Node16",
         "rootDir": "./src",
         "outDir": "./dist",
         "strict": true,
-        "moduleResolution": "node",
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
         "importHelpers": true,
         "experimentalDecorators": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "allowSyntheticDefaultImports": true,
-        "resolveJsonModule": true,
-        "forceConsistentCasingInFileNames": true,
+        "emitDecoratorMetadata": true,
         "removeComments": true,
+        "sourceMap": false,
+        "declaration": false,
+        "noEmitOnError": true,
+        "noImplicitAny": true,
+        "noImplicitReturns": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "exactOptionalPropertyTypes": true,
+        "noImplicitOverride": true,
+        "noPropertyAccessFromIndexSignature": true,
+        "noUncheckedIndexedAccess": true,
+        "allowUnreachableCode": false,
+        "allowUnusedLabels": false,
+        "verbatimModuleSyntax": true,
         "typeRoots": [
             "node_modules/@types"
         ],
-        "sourceMap": false,
         "baseUrl": "./"
     },
     "include": [
@@ -25,6 +39,8 @@
     ],
     "exclude": [
         "node_modules",
-        "dist"
+        "dist",
+        "**/*.test.ts",
+        "**/*.spec.ts"
     ]
 } 

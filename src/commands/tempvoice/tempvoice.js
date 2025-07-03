@@ -1,5 +1,5 @@
-const { SlashCommandBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
-const { db } = require('../../utils/database');
+import { SlashCommandBuilder, ChannelType, PermissionFlagsBits } from 'discord.js';
+import { db } from '../../utils/database.js';
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS temp_voice_settings (
@@ -18,7 +18,7 @@ db.exec(`
     )
 `);
 
-module.exports = {
+export default {
     data: new SlashCommandBuilder()
         .setName('臨時語音')
         .setDescription('臨時語音系統')

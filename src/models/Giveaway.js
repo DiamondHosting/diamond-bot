@@ -1,4 +1,4 @@
-const { db } = require('../utils/database');
+import { db } from '../utils/database.js';
 
 class Giveaway {
     constructor(data) {
@@ -129,4 +129,4 @@ class Giveaway {
     }
 }
 
-module.exports = Giveaway; 
+export default Giveaway; 

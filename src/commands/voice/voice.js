@@ -1,6 +1,6 @@
-const { SlashCommandBuilder, ChannelType } = require('discord.js');
+import { SlashCommandBuilder, ChannelType } from 'discord.js';
 
-module.exports = {
+export default {
     data: new SlashCommandBuilder()
         .setName('語音')
         .setDescription('語音頻道管理系統')

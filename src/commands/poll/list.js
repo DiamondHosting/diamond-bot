@@ -1,9 +1,9 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const Poll = require('../../models/Poll');
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import Poll from '../../models/Poll.js';
 
 const POLLS_PER_PAGE = 3;
 
-module.exports = {
+export default {
     data: new SlashCommandBuilder()
         .setName('投票列表')
         .setDescription('查看目前進行中的投票'),

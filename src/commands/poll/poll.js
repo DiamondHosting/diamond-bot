@@ -1,15 +1,15 @@
-const { 
+import { 
     SlashCommandBuilder, 
     EmbedBuilder, 
     ActionRowBuilder, 
     ButtonBuilder, 
     ButtonStyle,
     PermissionFlagsBits
-} = require('discord.js');
-const Poll = require('../../models/Poll');
-const cron = require('node-cron');
+} from 'discord.js';
+import Poll from '../../models/Poll.js';
+import cron from 'node-cron';
 
-module.exports = {
+export default {
     data: new SlashCommandBuilder()
         .setName('投票')
         .setDescription('投票相關指令')

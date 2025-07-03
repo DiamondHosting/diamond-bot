@@ -1,10 +1,42 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const Giveaway = require('../../models/Giveaway');
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } from 'discord.js';
+import Giveaway from '../../models/Giveaway.js';
 
-module.exports = {
+// 時間解析輔助函數
+function parseEndTime(timeStr) {
+    const timeRegex = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/;
+    const match = timeStr.match(timeRegex);
+    
+    if (!match) {
+        throw new Error('時間格式錯誤！請使用 YYYY-MM-DD HH:mm 格式');
+    }
+    
+    const [, year, month, day, hour, minute] = match;
+    const endTime = new Date(year, month - 1, day, hour, minute);
+    
+    if (isNaN(endTime.getTime())) {
+        throw new Error('無效的時間！');
+    }
+    
+    const now = new Date();
+    const minEndTime = new Date(now.getTime() + 60000); // 至少 1 分鐘後
+    const maxEndTime = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 最多 30 天後
+    
+    if (endTime <= minEndTime) {
+        throw new Error('結束時間必須至少在 1 分鐘後！');
+    }
+    
+    if (endTime > maxEndTime) {
+        throw new Error('結束時間不能超過 30 天！');
+    }
+    
+    return endTime;
+}
+
+export default {
     data: new SlashCommandBuilder()
         .setName('抽獎')
         .setDescription('抽獎相關指令')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageEvents)
         .addSubcommand(subcommand =>
             subcommand
                 .setName('發起')
@@ -12,12 +44,13 @@ module.exports = {
                 .addStringOption(option =>
                     option.setName('獎品')
                         .setDescription('抽獎的獎品')
-                        .setRequired(true))
+                        .setRequired(true)
+                        .setMaxLength(100))
                 .addIntegerOption(option =>
                     option.setName('得獎人數')
                         .setDescription('抽出的得獎人數')
                         .setMinValue(1)
-                        .setMaxValue(10)
+                        .setMaxValue(20)
                         .setRequired(true))
                 .addStringOption(option =>
                     option.setName('結束時間')
@@ -25,8 +58,9 @@ module.exports = {
                         .setRequired(true))
                 .addStringOption(option =>
                     option.setName('說明')
-                        .setDescription(`抽獎的詳細說明，\\n 表示換行`)
-                        .setRequired(false))
+                        .setDescription('抽獎的詳細說明，\\n 表示換行')
+                        .setRequired(false)
+                        .setMaxLength(500))
                 .addRoleOption(option =>
                     option.setName('限制身分組')
                         .setDescription('限制哪些身分組可以參加')
@@ -34,51 +68,52 @@ module.exports = {
                 .addRoleOption(option =>
                     option.setName('提及身分組')
                         .setDescription('要提及的身分組')
+                        .setRequired(false))
+                .addBooleanOption(option =>
+                    option.setName('允許重複參加')
+                        .setDescription('是否允許用戶重複參加')
                         .setRequired(false))),
 
     async execute(interaction) {
         if (interaction.options.getSubcommand() === '發起') {
             try {
-                const prize = interaction.options.getString('獎品');
-                const description = interaction.options.getString('說明');
+                // 權限檢查
+                if (!interaction.member.permissions.has(PermissionFlagsBits.ManageEvents)) {
+                    return await interaction.reply({
+                        content: '❌ 你沒有權限使用此指令！需要「管理活動」權限。',
+                        ephemeral: true
+                    });
+                }
+
+                const prize = interaction.options.getString('獎品')?.trim();
+                const description = interaction.options.getString('說明')?.trim();
                 const winnersCount = interaction.options.getInteger('得獎人數');
-                const endTimeStr = interaction.options.getString('結束時間');
+                const endTimeStr = interaction.options.getString('結束時間')?.trim();
                 const restrictRole = interaction.options.getRole('限制身分組');
                 const mentionRole = interaction.options.getRole('提及身分組');
+                const allowDuplicate = interaction.options.getBoolean('允許重複參加') ?? false;
+
+                // 輸入驗證
+                if (!prize) {
+                    return await interaction.reply({
+                        content: '❌ 獎品名稱不能為空！',
+                        ephemeral: true
+                    });
+                }
+
+                if (!endTimeStr) {
+                    return await interaction.reply({
+                        content: '❌ 請提供結束時間！',
+                        ephemeral: true
+                    });
+                }
 
                 let endTime;
                 try {
-                    const standardizedTimeStr = endTimeStr.replace(/\//g, '-');
-                    if (!standardizedTimeStr.match(/^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$/)) {
-                        throw new Error('格式錯誤');
-                    }
-                    const [datePart, timePart] = standardizedTimeStr.split(' ');
-                    const [year, month, day] = datePart.split('-').map(Number);
-                    const [hour, minute] = timePart.split(':').map(Number);
-                    endTime = new Date();
-                    const taipeiOffset = 8 * 60;
-                    const localOffset = endTime.getTimezoneOffset();
-                    const totalOffset = taipeiOffset + localOffset;
-                    endTime.setFullYear(year);
-                    endTime.setMonth(month - 1);
-                    endTime.setDate(day);
-                    endTime.setHours(hour);
-                    endTime.setMinutes(minute - totalOffset);
-                    endTime.setSeconds(0);
-                    endTime.setMilliseconds(0);
-                    if (isNaN(endTime.getTime())) {
-                        throw new Error('無效的時間');
-                    }
-                    const now = new Date();
-                    if (endTime.getTime() <= now.getTime()) {
-                        return await interaction.reply({
-                            content: '❌ 結束時間必須在未來！',
-                            ephemeral: true
-                        });
-                    }
+                    endTime = parseEndTime(endTimeStr);
                 } catch (error) {
                     return await interaction.reply({
-                        content: '❌ 無效的時間格式！請使用以下格式：\nYYYY-MM-DD HH:mm 或 YYYY/MM/DD HH:mm\n例如：2024-03-01 14:30 或 2024/03/01 14:30\n（使用台北時間）',
+                        content: `❌ ${error.message}`,
                         ephemeral: true
                     });
                 }
@@ -145,7 +180,8 @@ module.exports = {
                     participants: [],
                     created_at: Date.now(),
                     end_time: endTime.getTime(),
-                    is_ended: 0
+                    is_ended: 0,
+                    allow_duplicate: allowDuplicate
                 };
 
                 await Giveaway.create(giveawayData);
@@ -159,4 +195,4 @@ module.exports = {
             }
         }
     }
-}; 
+};
