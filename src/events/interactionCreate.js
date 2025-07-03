@@ -394,3 +394,294 @@ async function endGiveaway(giveawayId, client) {
         console.error('結束抽獎時發生錯誤：', error);
     }
 }
+
+// 處理投票信息按鈕
+async function handlePollInfoButton(interaction) {
+    try {
+        const pollId = interaction.message.id;
+        const poll = await Poll.findById(pollId);
+        
+        if (!poll) {
+            return await interaction.reply({
+                content: '❌ 找不到此投票！',
+                ephemeral: true
+            });
+        }
+
+        const customId = interaction.customId;
+        
+        if (customId === 'show_voters') {
+            await showVoters(interaction, poll);
+        } else if (customId === 'show_results') {
+            await showResults(interaction, poll);
+        }
+    } catch (error) {
+        console.error('❌ 處理投票信息時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 處理投票信息時發生錯誤！',
+            ephemeral: true
+        });
+    }
+}
+
+// 顯示投票者
+async function showVoters(interaction, poll) {
+    const voterList = Object.entries(poll.votes).map(([userId, votes]) => {
+        const optionNames = votes.map(i => poll.options[i]).join(', ');
+        return `<@${userId}>: ${optionNames}`;
+    });
+
+    const embed = new EmbedBuilder()
+        .setColor('#0099ff')
+        .setTitle('👥 投票者清單')
+        .setDescription(voterList.length > 0 ? voterList.join('\n') : '目前還沒有人投票')
+        .setFooter({ text: `總共 ${voterList.length} 人投票` });
+
+    await interaction.reply({
+        embeds: [embed],
+        ephemeral: true
+    });
+}
+
+// 顯示投票結果
+async function showResults(interaction, poll) {
+    const totalVotes = Object.values(poll.votes).flat().length;
+    const optionCounts = poll.options.map((option, index) => {
+        const count = Object.values(poll.votes).flat().filter(vote => vote === index).length;
+        const percentage = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
+        return { option, count, percentage };
+    });
+
+    const resultsText = optionCounts.map((item, index) => 
+        `**${index + 1}.** ${item.option}\n${createProgressBar(item.percentage)} ${item.count} 票 (${item.percentage}%)`
+    ).join('\n\n');
+
+    const embed = new EmbedBuilder()
+        .setColor('#00ff00')
+        .setTitle('📊 投票結果')
+        .setDescription(resultsText)
+        .setFooter({ text: `總投票數：${totalVotes}` });
+
+    await interaction.reply({
+        embeds: [embed],
+        ephemeral: true
+    });
+}
+
+// 處理參加抽獎
+async function handleJoinGiveaway(interaction, giveawayId) {
+    try {
+        const giveaway = db.prepare('SELECT * FROM giveaways WHERE id = ?').get(giveawayId);
+        
+        if (!giveaway) {
+            return await interaction.reply({
+                content: '❌ 找不到此抽獎！',
+                ephemeral: true
+            });
+        }
+
+        if (giveaway.is_ended) {
+            return await interaction.reply({
+                content: '❌ 此抽獎已結束！',
+                ephemeral: true
+            });
+        }
+
+        // 檢查是否已經參加
+        const existingParticipant = db.prepare(`
+            SELECT * FROM giveaway_participants 
+            WHERE giveaway_id = ? AND user_id = ?
+        `).get(giveawayId, interaction.user.id);
+
+        if (existingParticipant) {
+            // 取消參加
+            db.prepare(`
+                DELETE FROM giveaway_participants 
+                WHERE giveaway_id = ? AND user_id = ?
+            `).run(giveawayId, interaction.user.id);
+
+            await interaction.reply({
+                content: '❌ 你已取消參加此抽獎！',
+                ephemeral: true
+            });
+        } else {
+            // 參加抽獎
+            db.prepare(`
+                INSERT INTO giveaway_participants (giveaway_id, user_id, joined_at)
+                VALUES (?, ?, ?)
+            `).run(giveawayId, interaction.user.id, Date.now());
+
+            await interaction.reply({
+                content: '✅ 你已成功參加此抽獎！',
+                ephemeral: true
+            });
+        }
+
+        // 更新抽獎訊息的參與人數
+        await updateGiveawayMessage(interaction, giveaway);
+
+    } catch (error) {
+        console.error('❌ 處理參加抽獎時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 處理參加抽獎時發生錯誤！',
+            ephemeral: true
+        });
+    }
+}
+
+// 顯示抽獎參與者
+async function showGiveawayParticipants(interaction, giveawayId) {
+    try {
+        const participants = db.prepare(`
+            SELECT user_id FROM giveaway_participants 
+            WHERE giveaway_id = ?
+        `).all(giveawayId);
+
+        const participantList = participants.map(p => `<@${p.user_id}>`);
+
+        const embed = new EmbedBuilder()
+            .setColor('#ffa500')
+            .setTitle('🎉 抽獎參與者')
+            .setDescription(participantList.length > 0 ? participantList.join('\n') : '目前還沒有人參加')
+            .setFooter({ text: `總共 ${participantList.length} 人參加` });
+
+        await interaction.reply({
+            embeds: [embed],
+            ephemeral: true
+        });
+
+    } catch (error) {
+        console.error('❌ 顯示參與者時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 顯示參與者時發生錯誤！',
+            ephemeral: true
+        });
+    }
+}
+
+// 更新投票訊息
+async function updatePollMessage(interaction, poll) {
+    try {
+        const totalVotes = Object.values(poll.votes).flat().length;
+        const optionCounts = poll.options.map((option, index) => {
+            const count = Object.values(poll.votes).flat().filter(vote => vote === index).length;
+            return { option, count };
+        });
+
+        const resultsText = optionCounts.map((item, index) => 
+            `**${index + 1}.** ${item.option} - ${item.count} 票`
+        ).join('\n');
+
+        const embed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle(`📊 ${poll.question}`)
+            .setDescription(poll.description || '請選擇你的選項：')
+            .addFields({ name: '選項與票數', value: resultsText })
+            .setFooter({ 
+                text: `總投票數：${totalVotes} | 最多可選：${poll.max_choices} 項`,
+                iconURL: interaction.client.user.displayAvatarURL()
+            })
+            .setTimestamp();
+
+        // 創建按鈕
+        const optionButtons = poll.options.map((option, index) => 
+            new ButtonBuilder()
+                .setCustomId(`vote_${index}`)
+                .setLabel(`${index + 1}. ${option}`)
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        const infoButtons = [
+            new ButtonBuilder()
+                .setCustomId('show_voters')
+                .setLabel('查看投票者')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('👥'),
+            new ButtonBuilder()
+                .setCustomId('show_results')
+                .setLabel('查看結果')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('📊')
+        ];
+
+        const rows = [];
+        for (let i = 0; i < optionButtons.length; i += 3) {
+            const row = new ActionRowBuilder()
+                .addComponents(optionButtons.slice(i, i + 3));
+            rows.push(row);
+        }
+        
+        const infoRow = new ActionRowBuilder()
+            .addComponents(infoButtons);
+        rows.push(infoRow);
+
+        await interaction.message.edit({
+            embeds: [embed],
+            components: rows
+        });
+
+    } catch (error) {
+        console.error('❌ 更新投票訊息時發生錯誤：', error);
+    }
+}
+
+// 更新抽獎訊息
+async function updateGiveawayMessage(interaction, giveaway) {
+    try {
+        const participantCount = db.prepare(`
+            SELECT COUNT(*) as count FROM giveaway_participants 
+            WHERE giveaway_id = ?
+        `).get(giveaway.id).count;
+
+        const timeLeft = giveaway.end_time - Date.now();
+        const timeLeftText = timeLeft > 0 ? 
+            `<t:${Math.floor(giveaway.end_time / 1000)}:R>` : 
+            '已結束';
+
+        const embed = new EmbedBuilder()
+            .setColor('#FFD700')
+            .setTitle('🎉 抽獎活動')
+            .setDescription(`**獎品：${giveaway.prize}**\n${giveaway.description || ''}`)
+            .addFields(
+                { name: '🏆 得獎人數', value: giveaway.winners_count.toString(), inline: true },
+                { name: '👥 參加人數', value: participantCount.toString(), inline: true },
+                { name: '⏰ 結束時間', value: timeLeftText, inline: true }
+            )
+            .setFooter({ 
+                text: '點擊下方按鈕參加抽獎！',
+                iconURL: interaction.client.user.displayAvatarURL()
+            })
+            .setTimestamp();
+
+        const joinButton = new ButtonBuilder()
+            .setCustomId(`giveaway_join_${giveaway.id}`)
+            .setLabel('參加抽獎')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('🎟️');
+
+        const participantsButton = new ButtonBuilder()
+            .setCustomId(`giveaway_participants_${giveaway.id}`)
+            .setLabel('查看參與者')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('👥');
+
+        const row = new ActionRowBuilder()
+            .addComponents(joinButton, participantsButton);
+
+        await interaction.message.edit({
+            embeds: [embed],
+            components: [row]
+        });
+
+    } catch (error) {
+        console.error('❌ 更新抽獎訊息時發生錯誤：', error);
+    }
+}
+
+// 處理選單互動
+async function handleSelectMenu(interaction) {
+    await interaction.reply({
+        content: '❌ 選單功能尚未實作！',
+        ephemeral: true
+    });
+}

@@ -93,6 +93,38 @@ class Poll {
         }
     }
 
+    static find(conditions) {
+        try {
+            let query = 'SELECT * FROM polls WHERE 1=1';
+            const params = [];
+
+            if (conditions.is_ended !== undefined) {
+                query += ' AND is_ended = ?';
+                params.push(conditions.is_ended ? 1 : 0);
+            }
+
+            if (conditions.end_time) {
+                if (conditions.end_time.$lte !== undefined) {
+                    query += ' AND end_time <= ?';
+                    params.push(conditions.end_time.$lte);
+                }
+            }
+
+            if (conditions.guild_id) {
+                query += ' AND guild_id = ?';
+                params.push(conditions.guild_id);
+            }
+
+            const stmt = db.prepare(query);
+            const results = stmt.all(...params);
+            
+            return results.map(row => new Poll(row));
+        } catch (error) {
+            console.error('查詢投票時發生錯誤：', error);
+            return [];
+        }
+    }
+
     save() {
         try {
             const stmt = db.prepare(`
