@@ -49,6 +49,8 @@ async function handleButtonInteraction(interaction) {
         await handleVoteButton(interaction);
     } else if (customId === 'show_voters' || customId === 'show_results') {
         await handlePollInfoButton(interaction);
+    } else if (customId === 'end_poll') {
+        await handleEndPollButton(interaction);
     } else if (customId.startsWith('giveaway_')) {
         await handleGiveawayButton(interaction);
     } else {
@@ -308,16 +310,18 @@ async function endGiveaway(giveawayId, client) {
                                 );
 
                             await message.edit({ components: [row] });
-                            await channel.send('抽獎結束，但沒有人參加！');
                         }
                     } catch (messageError) {
-                        console.error('無法找到或編輯訊息：', messageError);
-                        await channel.send('抽獎結束，但沒有人參加！');
+                        console.error('無法找到或編輯訊息，訊息可能已被刪除：', messageError.message);
                     }
+                    await channel.send('🎉 抽獎結束，但沒有人參加！');
                 }
             } catch (channelError) {
-                console.error('無法找到頻道：', channelError);
+                console.error('無法找到頻道：', channelError.message);
             }
+            
+            // 標記抽獎為已結束
+            db.prepare(`UPDATE giveaways SET is_ended = 1 WHERE id = ?`).run(giveawayId);
             return;
         }
 
@@ -350,7 +354,7 @@ async function endGiveaway(giveawayId, client) {
                         await message.edit({ components: [row] });
                     }
                 } catch (messageError) {
-                    console.error('無法找到或編輯原始訊息：', messageError);
+                    console.error('無法找到或編輯原始訊息，訊息可能已被刪除：', messageError.message);
                 }
 
                 const winnerEmbed = new EmbedBuilder()
@@ -381,17 +385,17 @@ async function endGiveaway(giveawayId, client) {
                     );
 
                 await channel.send({
-                    content: `恭喜 ${winners.map(id => `<@${id}>`).join('、')} 獲得 **${giveaway.prize}**！`,
+                    content: `🎉 恭喜 ${winners.map(id => `<@${id}>`).join('、')} 獲得 **${giveaway.prize}**！`,
                     embeds: [winnerEmbed],
                     components: [adminRow],
                     allowedMentions: { users: winners }
                 });
             }
         } catch (channelError) {
-            console.error('無法找到頻道：', channelError);
+            console.error('無法找到頻道：', channelError.message);
         }
     } catch (error) {
-        console.error('結束抽獎時發生錯誤：', error);
+        console.error('結束抽獎時發生錯誤：', error.message);
     }
 }
 
@@ -466,6 +470,54 @@ async function showResults(interaction, poll) {
         embeds: [embed],
         ephemeral: true
     });
+}
+
+// 處理結束投票按鈕
+async function handleEndPollButton(interaction) {
+    try {
+        const pollId = interaction.message.id;
+        const poll = await Poll.findById(pollId);
+        
+        if (!poll) {
+            return await interaction.reply({
+                content: '❌ 找不到此投票！',
+                ephemeral: true
+            });
+        }
+
+        if (poll.is_ended) {
+            return await interaction.reply({
+                content: '❌ 此投票已經結束了！',
+                ephemeral: true
+            });
+        }
+
+        // 檢查權限 - 只有投票發起者或管理員可以結束投票
+        const member = await interaction.guild.members.fetch(interaction.user.id);
+        const isHost = poll.host_id === interaction.user.id;
+        const isAdmin = member.permissions.has('ManageMessages');
+
+        if (!isHost && !isAdmin) {
+            return await interaction.reply({
+                content: '❌ 只有投票發起者或管理員可以結束投票！',
+                ephemeral: true
+            });
+        }
+
+        await endPoll(pollId, interaction);
+        
+        await interaction.reply({
+            content: '✅ 投票已成功結束！',
+            ephemeral: true
+        });
+
+    } catch (error) {
+        console.error('❌ 結束投票時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 結束投票時發生錯誤！',
+            ephemeral: true
+        });
+    }
 }
 
 // 處理參加抽獎

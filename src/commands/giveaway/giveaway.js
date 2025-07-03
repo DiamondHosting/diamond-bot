@@ -121,11 +121,10 @@ export default {
                 const embed = new EmbedBuilder()
                     .setColor('#FFD700')
                     .setTitle(`🎉 抽獎：${prize}`)
-                    .setDescription(description ? description.replace(/\\n/g, '\n') : '')
                     .addFields(
                         { name: '🏆 得獎人數', value: `${winnersCount} 人`, inline: true },
                         { 
-                            name: '結束時間', 
+                            name: '⏰ 結束時間', 
                             value: `<t:${Math.floor(endTime.getTime() / 1000)}:F>\n倒數：<t:${Math.floor(endTime.getTime() / 1000)}:R>`, 
                             inline: false 
                         }
@@ -135,8 +134,13 @@ export default {
                         iconURL: interaction.user.displayAvatarURL()
                     });
 
+                // 只在有描述時才設置描述
+                if (description && description.length > 0) {
+                    embed.setDescription(description.replace(/\\n/g, '\n'));
+                }
+
                 if (restrictRole) {
-                    embed.addFields({ name: '參加限制', value: restrictRole.toString(), inline: true });
+                    embed.addFields({ name: '🔒 參加限制', value: restrictRole.toString(), inline: true });
                 }
 
                 const joinButton = new ButtonBuilder()
