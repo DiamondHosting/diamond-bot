@@ -1,0 +1,23 @@
+{
+  "name": "discord-bot",
+  "version": "1.0.0",
+  "description": "Discord 機器人 with slash commands",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.16.1",
+    "better-sqlite3": "^9.4.3",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "play-dl": "^1.9.7",
+    "sqlite3": "^5.1.7",
+    "ytdl-core": "^4.11.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
