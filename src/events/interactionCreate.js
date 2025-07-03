@@ -1,6 +1,7 @@
 import { db } from '../utils/database.js';
 import { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, Colors } from 'discord.js';
 import Poll from '../models/Poll.js';
+import Giveaway from '../models/Giveaway.js';
 import cron from 'node-cron';
 
 // 存儲定時任務的 Map
@@ -67,7 +68,7 @@ async function handleVoteButton(interaction) {
         const pollId = interaction.message.id;
         const optionIndex = parseInt(interaction.customId.replace('vote_', ''));
         
-        const poll = await Poll.findById(pollId);
+        const poll = await Poll.findOne({ message_id: pollId });
         if (!poll) {
             return await interaction.reply({
                 content: '❌ 找不到此投票！',
@@ -84,7 +85,7 @@ async function handleVoteButton(interaction) {
 
         // 檢查時間限制
         if (poll.end_time && Date.now() > poll.end_time) {
-            await endPoll(pollId, interaction);
+            await endPoll(poll.message_id, interaction);
             return await interaction.reply({
                 content: '❌ 此投票已過期！',
                 ephemeral: true
@@ -104,13 +105,15 @@ async function handleVoteButton(interaction) {
 
         // 處理投票邏輯
         const userId = interaction.user.id;
-        const userVotes = poll.votes[userId] || [];
+        const userVotes = poll.votes.get(userId) || [];
         
         if (userVotes.includes(optionIndex)) {
             // 取消投票
-            poll.votes[userId] = userVotes.filter(vote => vote !== optionIndex);
-            if (poll.votes[userId].length === 0) {
-                delete poll.votes[userId];
+            const newVotes = userVotes.filter(vote => vote !== optionIndex);
+            if (newVotes.length === 0) {
+                poll.votes.delete(userId);
+            } else {
+                poll.votes.set(userId, newVotes);
             }
         } else {
             // 新增投票
@@ -120,7 +123,7 @@ async function handleVoteButton(interaction) {
                     ephemeral: true
                 });
             }
-            poll.votes[userId] = [...userVotes, optionIndex];
+            poll.votes.set(userId, [...userVotes, optionIndex]);
         }
 
         await poll.save();
@@ -147,12 +150,16 @@ async function handleGiveawayButton(interaction) {
         
         if (customId.startsWith('giveaway_join_')) {
             const giveawayId = customId.replace('giveaway_join_', '');
-            // 處理參加抽獎邏輯
             await handleJoinGiveaway(interaction, giveawayId);
         } else if (customId.startsWith('giveaway_participants_')) {
             const giveawayId = customId.replace('giveaway_participants_', '');
-            // 顯示參與者清單
             await showGiveawayParticipants(interaction, giveawayId);
+        } else if (customId.startsWith('giveaway_claimed_')) {
+            const giveawayId = customId.replace('giveaway_claimed_', '');
+            await handleGiveawayClaimed(interaction, giveawayId);
+        } else if (customId.startsWith('giveaway_reroll_')) {
+            const giveawayId = customId.replace('giveaway_reroll_', '');
+            await handleGiveawayReroll(interaction, giveawayId);
         }
     } catch (error) {
         console.error('❌ 處理抽獎按鈕時發生錯誤：', error);
@@ -210,10 +217,10 @@ async function checkExpiredPolls(client) {
 // 檢查過期的抽獎並結束
 async function checkExpiredGiveaways(client) {
     const now = Date.now();
-    const endedGiveaways = db.prepare(`
-        SELECT * FROM giveaways 
-        WHERE is_ended = 0 AND end_time <= ?
-    `).all(now);
+    const endedGiveaways = await Giveaway.find({ 
+        is_ended: false, 
+        end_time: { $lte: now } 
+    });
 
     for (const giveaway of endedGiveaways) {
         try {
@@ -231,7 +238,7 @@ function createProgressBar(percentage) {
 }
 
 async function endPoll(pollId, interaction) {
-    const poll = await Poll.findById(pollId);
+    const poll = await Poll.findOne({ message_id: pollId });
     if (!poll || poll.is_ended) return;
 
     const optionButtons = poll.options.map((opt, i) => 
@@ -282,37 +289,42 @@ async function endPoll(pollId, interaction) {
         }
     }
 
-    poll.is_ended = 1;
+    poll.is_ended = true;
     await poll.save();
 }
 
 async function endGiveaway(giveawayId, client) {
     try {
-        const giveaway = db.prepare('SELECT * FROM giveaways WHERE id = ?').get(giveawayId);
+        const giveaway = await Giveaway.findOne({ id: giveawayId });
         if (!giveaway || giveaway.is_ended) return;
 
-        const participants = db.prepare(`
-            SELECT user_id FROM giveaway_participants 
-            WHERE giveaway_id = ?
-        `).all(giveawayId);
-
-        if (participants.length === 0) {
+        if (giveaway.participants.length === 0) {
             try {
                 const channel = await client.channels.fetch(giveaway.channel_id);
                 if (channel) {
                     try {
                         const message = await channel.messages.fetch(giveaway.message_id);
                         if (message) {
+                            const joinButton = new ButtonBuilder()
+                                .setCustomId(`giveaway_join_${giveawayId}`)
+                                .setLabel('已結束')
+                                .setStyle(ButtonStyle.Danger)
+                                .setEmoji('🔒')
+                                .setDisabled(true);
+
+                            const participantsButton = new ButtonBuilder()
+                                .setCustomId(`giveaway_participants_${giveawayId}`)
+                                .setLabel('0 人參加')
+                                .setStyle(ButtonStyle.Secondary)
+                                .setEmoji('👥');
+
                             const row = new ActionRowBuilder()
-                                .addComponents(
-                                    ButtonBuilder.from(message.components[0].components[0]).setDisabled(true),
-                                    ButtonBuilder.from(message.components[0].components[1])
-                                );
+                                .addComponents(joinButton, participantsButton);
 
                             await message.edit({ components: [row] });
                         }
                     } catch (messageError) {
-                        console.error('無法找到或編輯訊息，訊息可能已被刪除：', messageError.message);
+                        console.error('無法找到或編輯訊息：', messageError.message);
                     }
                     await channel.send('🎉 抽獎結束，但沒有人參加！');
                 }
@@ -320,24 +332,21 @@ async function endGiveaway(giveawayId, client) {
                 console.error('無法找到頻道：', channelError.message);
             }
             
-            // 標記抽獎為已結束
-            db.prepare(`UPDATE giveaways SET is_ended = 1 WHERE id = ?`).run(giveawayId);
+            giveaway.is_ended = true;
+            await giveaway.save();
             return;
         }
 
         const winners = [];
-        const participantIds = participants.map(p => p.user_id);
-        for (let i = 0; i < Math.min(giveaway.winners_count, participants.length); i++) {
+        const participantIds = [...giveaway.participants.map(p => p.user_id)];
+        for (let i = 0; i < Math.min(giveaway.winners_count, participantIds.length); i++) {
             const winnerIndex = Math.floor(Math.random() * participantIds.length);
             winners.push(participantIds[winnerIndex]);
             participantIds.splice(winnerIndex, 1);
         }
 
-        db.prepare(`
-            UPDATE giveaways 
-            SET is_ended = 1 
-            WHERE id = ?
-        `).run(giveawayId);
+        giveaway.is_ended = true;
+        await giveaway.save();
 
         try {
             const channel = await client.channels.fetch(giveaway.channel_id);
@@ -345,16 +354,26 @@ async function endGiveaway(giveawayId, client) {
                 try {
                     const message = await channel.messages.fetch(giveaway.message_id);
                     if (message) {
+                        const joinButton = new ButtonBuilder()
+                            .setCustomId(`giveaway_join_${giveawayId}`)
+                            .setLabel('已結束')
+                            .setStyle(ButtonStyle.Danger)
+                            .setEmoji('🔒')
+                            .setDisabled(true);
+
+                        const participantsButton = new ButtonBuilder()
+                            .setCustomId(`giveaway_participants_${giveawayId}`)
+                            .setLabel(`${giveaway.participants.length} 人參加`)
+                            .setStyle(ButtonStyle.Secondary)
+                            .setEmoji('👥');
+
                         const row = new ActionRowBuilder()
-                            .addComponents(
-                                ButtonBuilder.from(message.components[0].components[0]).setDisabled(true),
-                                ButtonBuilder.from(message.components[0].components[1])
-                            );
+                            .addComponents(joinButton, participantsButton);
 
                         await message.edit({ components: [row] });
                     }
                 } catch (messageError) {
-                    console.error('無法找到或編輯原始訊息，訊息可能已被刪除：', messageError.message);
+                    console.error('無法找到或編輯原始訊息：', messageError.message);
                 }
 
                 const winnerEmbed = new EmbedBuilder()
@@ -365,7 +384,7 @@ async function endGiveaway(giveawayId, client) {
                         { name: '🏆 得獎者', value: winners.map(id => `<@${id}>`).join('\n'), inline: false }
                     )
                     .setFooter({ 
-                        text: '請管理員確認得獎者是否已領取獎品',
+                        text: '只有發起者可以操作下方按鈕',
                         iconURL: client.user.displayAvatarURL()
                     })
                     .setTimestamp();
@@ -403,7 +422,7 @@ async function endGiveaway(giveawayId, client) {
 async function handlePollInfoButton(interaction) {
     try {
         const pollId = interaction.message.id;
-        const poll = await Poll.findById(pollId);
+        const poll = await Poll.findOne({ message_id: pollId });
         
         if (!poll) {
             return await interaction.reply({
@@ -430,7 +449,7 @@ async function handlePollInfoButton(interaction) {
 
 // 顯示投票者
 async function showVoters(interaction, poll) {
-    const voterList = Object.entries(poll.votes).map(([userId, votes]) => {
+    const voterList = Array.from(poll.votes.entries()).map(([userId, votes]) => {
         const optionNames = votes.map(i => poll.options[i]).join(', ');
         return `<@${userId}>: ${optionNames}`;
     });
@@ -449,9 +468,9 @@ async function showVoters(interaction, poll) {
 
 // 顯示投票結果
 async function showResults(interaction, poll) {
-    const totalVotes = Object.values(poll.votes).flat().length;
+    const totalVotes = Array.from(poll.votes.values()).flat().length;
     const optionCounts = poll.options.map((option, index) => {
-        const count = Object.values(poll.votes).flat().filter(vote => vote === index).length;
+        const count = Array.from(poll.votes.values()).flat().filter(vote => vote === index).length;
         const percentage = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
         return { option, count, percentage };
     });
@@ -476,7 +495,7 @@ async function showResults(interaction, poll) {
 async function handleEndPollButton(interaction) {
     try {
         const pollId = interaction.message.id;
-        const poll = await Poll.findById(pollId);
+        const poll = await Poll.findOne({ message_id: pollId });
         
         if (!poll) {
             return await interaction.reply({
@@ -523,7 +542,7 @@ async function handleEndPollButton(interaction) {
 // 處理參加抽獎
 async function handleJoinGiveaway(interaction, giveawayId) {
     try {
-        const giveaway = db.prepare('SELECT * FROM giveaways WHERE id = ?').get(giveawayId);
+        const giveaway = await Giveaway.findOne({ id: giveawayId });
         
         if (!giveaway) {
             return await interaction.reply({
@@ -534,23 +553,18 @@ async function handleJoinGiveaway(interaction, giveawayId) {
 
         if (giveaway.is_ended) {
             return await interaction.reply({
-                content: '❌ 此抽獎已結束！',
+                content: '❌ 此抽獎已結束，無法參加或退出！',
                 ephemeral: true
             });
         }
 
         // 檢查是否已經參加
-        const existingParticipant = db.prepare(`
-            SELECT * FROM giveaway_participants 
-            WHERE giveaway_id = ? AND user_id = ?
-        `).get(giveawayId, interaction.user.id);
+        const existingIndex = giveaway.participants.findIndex(p => p.user_id === interaction.user.id);
 
-        if (existingParticipant) {
+        if (existingIndex !== -1) {
             // 取消參加
-            db.prepare(`
-                DELETE FROM giveaway_participants 
-                WHERE giveaway_id = ? AND user_id = ?
-            `).run(giveawayId, interaction.user.id);
+            giveaway.participants.splice(existingIndex, 1);
+            await giveaway.save();
 
             await interaction.reply({
                 content: '❌ 你已取消參加此抽獎！',
@@ -558,10 +572,11 @@ async function handleJoinGiveaway(interaction, giveawayId) {
             });
         } else {
             // 參加抽獎
-            db.prepare(`
-                INSERT INTO giveaway_participants (giveaway_id, user_id, joined_at)
-                VALUES (?, ?, ?)
-            `).run(giveawayId, interaction.user.id, Date.now());
+            giveaway.participants.push({
+                user_id: interaction.user.id,
+                joined_at: Date.now()
+            });
+            await giveaway.save();
 
             await interaction.reply({
                 content: '✅ 你已成功參加此抽獎！',
@@ -584,18 +599,48 @@ async function handleJoinGiveaway(interaction, giveawayId) {
 // 顯示抽獎參與者
 async function showGiveawayParticipants(interaction, giveawayId) {
     try {
-        const participants = db.prepare(`
-            SELECT user_id FROM giveaway_participants 
-            WHERE giveaway_id = ?
-        `).all(giveawayId);
+        const giveaway = await Giveaway.findOne({ id: giveawayId });
+        
+        if (!giveaway) {
+            return await interaction.reply({
+                content: '❌ 找不到此抽獎！',
+                ephemeral: true
+            });
+        }
 
-        const participantList = participants.map(p => `<@${p.user_id}>`);
+        // 按參加時間排序（先參加的在上面）
+        const sortedParticipants = giveaway.participants.sort((a, b) => a.joined_at - b.joined_at);
+        
+        let description = '';
+        if (sortedParticipants.length === 0) {
+            description = '目前還沒有人參加';
+        } else {
+            // 分批處理參與者，避免超過 Discord 限制
+            const maxPerPage = 20;
+            const participants = sortedParticipants.slice(0, maxPerPage);
+            
+            for (let i = 0; i < participants.length; i++) {
+                const participant = participants[i];
+                try {
+                    const user = await interaction.client.users.fetch(participant.user_id);
+                    const joinTime = new Date(participant.joined_at);
+                    const timeString = `${joinTime.getHours().toString().padStart(2, '0')}:${joinTime.getMinutes().toString().padStart(2, '0')}`;
+                    description += `${i + 1}. ${user.displayName || user.username} - ${timeString}\n`;
+                } catch (error) {
+                    description += `${i + 1}. <@${participant.user_id}> - 未知時間\n`;
+                }
+            }
+            
+            if (sortedParticipants.length > maxPerPage) {
+                description += `\n... 還有 ${sortedParticipants.length - maxPerPage} 人`;
+            }
+        }
 
         const embed = new EmbedBuilder()
             .setColor('#ffa500')
             .setTitle('🎉 抽獎參與者')
-            .setDescription(participantList.length > 0 ? participantList.join('\n') : '目前還沒有人參加')
-            .setFooter({ text: `總共 ${participantList.length} 人參加` });
+            .setDescription(description)
+            .setFooter({ text: `總共 ${sortedParticipants.length} 人參加 | 按參加順序排列` });
 
         await interaction.reply({
             embeds: [embed],
@@ -611,12 +656,147 @@ async function showGiveawayParticipants(interaction, giveawayId) {
     }
 }
 
+// 處理獎品已領取按鈕
+async function handleGiveawayClaimed(interaction, giveawayId) {
+    try {
+        const giveaway = await Giveaway.findOne({ id: giveawayId });
+        
+        if (!giveaway) {
+            return await interaction.reply({
+                content: '❌ 找不到此抽獎！',
+                ephemeral: true
+            });
+        }
+
+        // 檢查權限 - 只有發起者可以操作
+        if (giveaway.host_id !== interaction.user.id) {
+            return await interaction.reply({
+                content: '❌ 只有抽獎發起者可以操作此按鈕！',
+                ephemeral: true
+            });
+        }
+
+        // 禁用所有按鈕
+        const disabledRow = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`giveaway_claimed_${giveawayId}`)
+                    .setLabel('已確認領取')
+                    .setStyle(ButtonStyle.Success)
+                    .setEmoji('✅')
+                    .setDisabled(true),
+                new ButtonBuilder()
+                    .setCustomId(`giveaway_reroll_${givewayId}`)
+                    .setLabel('重新抽獎')
+                    .setStyle(ButtonStyle.Danger)
+                    .setEmoji('🎲')
+                    .setDisabled(true)
+            );
+
+        await interaction.update({ components: [disabledRow] });
+        
+        await interaction.followUp({
+            content: '✅ 已確認得獎者領取獎品！',
+            ephemeral: true
+        });
+
+    } catch (error) {
+        console.error('❌ 處理已領取按鈕時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 處理操作時發生錯誤！',
+            ephemeral: true
+        });
+    }
+}
+
+// 處理重新抽獎按鈕
+async function handleGiveawayReroll(interaction, giveawayId) {
+    try {
+        const giveaway = await Giveaway.findOne({ id: giveawayId });
+        
+        if (!giveaway) {
+            return await interaction.reply({
+                content: '❌ 找不到此抽獎！',
+                ephemeral: true
+            });
+        }
+
+        // 檢查權限 - 只有發起者可以操作
+        if (giveaway.host_id !== interaction.user.id) {
+            return await interaction.reply({
+                content: '❌ 只有抽獎發起者可以操作此按鈕！',
+                ephemeral: true
+            });
+        }
+
+        if (giveaway.participants.length === 0) {
+            return await interaction.reply({
+                content: '❌ 沒有參與者可以重新抽獎！',
+                ephemeral: true
+            });
+        }
+
+        // 重新抽獎
+        const winners = [];
+        const participantIds = [...giveaway.participants.map(p => p.user_id)];
+        for (let i = 0; i < Math.min(giveaway.winners_count, participantIds.length); i++) {
+            const winnerIndex = Math.floor(Math.random() * participantIds.length);
+            winners.push(participantIds[winnerIndex]);
+            participantIds.splice(winnerIndex, 1);
+        }
+
+        const newWinnerEmbed = new EmbedBuilder()
+            .setColor('#FF6B6B')
+            .setTitle('🎲 重新抽獎結果')
+            .setDescription(`**獎品：${giveaway.prize}**`)
+            .addFields(
+                { name: '🏆 新得獎者', value: winners.map(id => `<@${id}>`).join('\n'), inline: false }
+            )
+            .setFooter({ 
+                text: '這是重新抽獎的結果',
+                iconURL: interaction.client.user.displayAvatarURL()
+            })
+            .setTimestamp();
+
+        const adminRow = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`giveaway_claimed_${giveawayId}`)
+                    .setLabel('已領取獎品')
+                    .setStyle(ButtonStyle.Success)
+                    .setEmoji('✅'),
+                new ButtonBuilder()
+                    .setCustomId(`giveaway_reroll_${giveawayId}`)
+                    .setLabel('重新抽獎')
+                    .setStyle(ButtonStyle.Danger)
+                    .setEmoji('🎲')
+            );
+
+        await interaction.update({
+            embeds: [newWinnerEmbed],
+            components: [adminRow]
+        });
+
+        await interaction.followUp({
+            content: `🎲 重新抽獎完成！新得獎者：${winners.map(id => `<@${id}>`).join('、')}`,
+            allowedMentions: { users: winners }
+        });
+
+    } catch (error) {
+        console.error('❌ 處理重新抽獎時發生錯誤：', error);
+        await interaction.reply({
+            content: '❌ 重新抽獎時發生錯誤！',
+            ephemeral: true
+        });
+    }
+}
+
 // 更新投票訊息
 async function updatePollMessage(interaction, poll) {
     try {
-        const totalVotes = Object.values(poll.votes).flat().length;
+        const totalVotes = Array.from(poll.votes.values()).flat().length;
         const optionCounts = poll.options.map((option, index) => {
-            const count = Object.values(poll.votes).flat().filter(vote => vote === index).length;
+            const count = Array.from(poll.votes.values()).flat().filter(vote => vote === index).length;
             return { option, count };
         });
 
@@ -641,6 +821,7 @@ async function updatePollMessage(interaction, poll) {
                 .setCustomId(`vote_${index}`)
                 .setLabel(`${index + 1}. ${option}`)
                 .setStyle(ButtonStyle.Primary)
+                .setDisabled(poll.is_ended)
         );
 
         const infoButtons = [
@@ -653,7 +834,13 @@ async function updatePollMessage(interaction, poll) {
                 .setCustomId('show_results')
                 .setLabel('查看結果')
                 .setStyle(ButtonStyle.Success)
-                .setEmoji('📊')
+                .setEmoji('📊'),
+            new ButtonBuilder()
+                .setCustomId('end_poll')
+                .setLabel(poll.is_ended ? '已結束' : '結束投票')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🛑')
+                .setDisabled(poll.is_ended)
         ];
 
         const rows = [];
@@ -680,40 +867,39 @@ async function updatePollMessage(interaction, poll) {
 // 更新抽獎訊息
 async function updateGiveawayMessage(interaction, giveaway) {
     try {
-        const participantCount = db.prepare(`
-            SELECT COUNT(*) as count FROM giveaway_participants 
-            WHERE giveaway_id = ?
-        `).get(giveaway.id).count;
-
         const timeLeft = giveaway.end_time - Date.now();
         const timeLeftText = timeLeft > 0 ? 
             `<t:${Math.floor(giveaway.end_time / 1000)}:R>` : 
             '已結束';
 
         const embed = new EmbedBuilder()
-            .setColor('#FFD700')
-            .setTitle('🎉 抽獎活動')
-            .setDescription(`**獎品：${giveaway.prize}**\n${giveaway.description || ''}`)
+            .setColor(giveaway.is_ended ? '#FF0000' : '#FFD700')
+            .setTitle(`🎉 抽獎：${giveaway.prize}`)
             .addFields(
                 { name: '🏆 得獎人數', value: giveaway.winners_count.toString(), inline: true },
-                { name: '👥 參加人數', value: participantCount.toString(), inline: true },
+                { name: '👥 參加人數', value: giveaway.participants.length.toString(), inline: true },
                 { name: '⏰ 結束時間', value: timeLeftText, inline: true }
             )
             .setFooter({ 
-                text: '點擊下方按鈕參加抽獎！',
+                text: giveaway.is_ended ? '抽獎已結束' : '點擊下方按鈕參加抽獎！',
                 iconURL: interaction.client.user.displayAvatarURL()
             })
             .setTimestamp();
 
+        if (giveaway.description) {
+            embed.setDescription(giveaway.description);
+        }
+
         const joinButton = new ButtonBuilder()
             .setCustomId(`giveaway_join_${giveaway.id}`)
-            .setLabel('參加抽獎')
-            .setStyle(ButtonStyle.Primary)
-            .setEmoji('🎟️');
+            .setLabel(giveaway.is_ended ? '已結束' : '參加抽獎')
+            .setStyle(giveaway.is_ended ? ButtonStyle.Danger : ButtonStyle.Primary)
+            .setEmoji(giveaway.is_ended ? '🔒' : '🎟️')
+            .setDisabled(giveaway.is_ended);
 
         const participantsButton = new ButtonBuilder()
             .setCustomId(`giveaway_participants_${giveaway.id}`)
-            .setLabel('查看參與者')
+            .setLabel(`${giveaway.participants.length} 人參加`)
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('👥');
 

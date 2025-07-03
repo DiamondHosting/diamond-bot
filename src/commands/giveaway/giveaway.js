@@ -172,7 +172,7 @@ export default {
                 });
 
                 const giveawayData = {
-                    id: interaction.id,
+                    id: message.id,
                     prize: prize,
                     description: description,
                     winners_count: winnersCount,
@@ -184,7 +184,7 @@ export default {
                     participants: [],
                     created_at: Date.now(),
                     end_time: endTime.getTime(),
-                    is_ended: 0,
+                    is_ended: false,
                     allow_duplicate: allowDuplicate
                 };
 

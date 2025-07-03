@@ -259,17 +259,17 @@ export default {
                 });
 
                 const pollData = {
-                    id: interaction.id,
+                    id: response.id,
                     question: question,
                     description: description,
                     options: options,
-                    votes: {},
+                    votes: new Map(),
                     channel_id: interaction.channelId,
                     guild_id: interaction.guildId,
                     message_id: response.id,
                     created_at: Date.now(),
                     end_time: endTime ? endTime.getTime() : null,
-                    is_ended: 0,
+                    is_ended: false,
                     host_id: interaction.user.id,
                     is_public: isPublic,
                     max_choices: maxChoices,
@@ -283,7 +283,7 @@ export default {
                     const cronTime = `${endTime.getMinutes()} ${endTime.getHours()} ${endTime.getDate()} ${endTime.getMonth() + 1} *`;
                     cron.schedule(cronTime, async () => {
                         try {
-                            await endPoll(poll.id, interaction);
+                            await endPoll(response.id, interaction);
                         } catch (error) {
                             console.error('結束投票時發生錯誤：', error);
                         }
@@ -328,7 +328,10 @@ export default {
             }
         } else if (subcommand === '列表') {
             try {
-                const activePolls = await Poll.findActive(interaction.guildId);
+                const activePolls = await Poll.find({ 
+                    guild_id: interaction.guildId, 
+                    is_ended: false 
+                });
 
                 if (activePolls.length === 0) {
                     return await interaction.reply({
@@ -343,7 +346,7 @@ export default {
                     .setDescription(
                         activePolls.map(poll => {
                             const endTime = Math.floor(poll.end_time / 1000);
-                            const totalVotes = Object.keys(poll.votes).length;
+                            const totalVotes = poll.votes ? poll.votes.size : 0;
                             return `**${poll.question}**\n` +
                                    `投票人數：${totalVotes} 人\n` +
                                    `結束時間：<t:${endTime}:F> (<t:${endTime}:R>)\n` +
@@ -374,13 +377,8 @@ export default {
 };
 
 async function endPoll(pollId, interaction) {
-    const pollData = await Poll.findById(pollId);
+    const pollData = await Poll.findOne({ message_id: pollId });
     if (!pollData || pollData.is_ended) return;
-
-    const results = Object.entries(pollData.votes).reduce((acc, [userId, optionIndex]) => {
-        acc[optionIndex] = (acc[optionIndex] || 0) + 1;
-        return acc;
-    }, {});
 
     const optionButtons = pollData.options.map((opt, i) => 
         new ButtonBuilder()
@@ -430,6 +428,6 @@ async function endPoll(pollId, interaction) {
         }
     }
 
-    pollData.is_ended = 1;
+    pollData.is_ended = true;
     await pollData.save();
-} 
+}
